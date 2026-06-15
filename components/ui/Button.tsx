@@ -50,7 +50,7 @@ export function Button({
 
   return (
     <TouchableOpacity
-      testID={testID} // <--- 2. ADD THIS HERE
+testID={testID}
       onPress={onPress}
       disabled={disabled || loading}
       activeOpacity={0.8}
