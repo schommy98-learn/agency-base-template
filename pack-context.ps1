@@ -1,53 +1,297 @@
-$OutputFile = "DiscFinderContext.txt"
+[CmdletBinding()]
+param(
+    [string]$ProjectName = (Split-Path -Leaf (Get-Location)),
+    [string]$OutputFile = "",
+    [int]$MaxFileSizeKB = 512,
+    [switch]$IncludeNative
+)
 
-# 1. Aggressive Folder Exclusions (Prevents the text file from being 50MB)
+$ErrorActionPreference = "Stop"
+
+$RootPath = (Get-Location).Path
+$SafeProjectName = ($ProjectName -replace "[^A-Za-z0-9_-]", "")
+
+if ([string]::IsNullOrWhiteSpace($SafeProjectName)) {
+    $SafeProjectName = "Project"
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputFile)) {
+    $OutputFile = "${SafeProjectName}Context.txt"
+}
+
+$OutputPath = Join-Path $RootPath $OutputFile
+
+# Folders that are generated, very large, binary-heavy, or not useful in routine AI context.
 $ExcludeFolders = @(
-    'node_modules', '.expo', '.git', 'ios', 'android', 
-    'bin', 'gen', 'mir', 'internal-mir', 'Data', 'assets', 'GhostBackups'
+    "node_modules",
+    ".expo",
+    ".git",
+    ".metro-cache",
+    ".cache",
+    ".next",
+    ".turbo",
+    ".eas",
+    "dist",
+    "build",
+    "web-build",
+    "coverage",
+    "Pods",
+    "DerivedData",
+    "artifacts",
+    "test-results",
+    "playwright-report",
+    "maestro-results",
+    "GhostBackups"
 )
 
-# 2. Aggressive File Exclusions (Lock files and configs that waste tokens)
-$ExcludeFiles = @(
-    'package-lock.json', 'yarn.lock', 'package.json', 'eas.json'
+if (-not $IncludeNative) {
+    $ExcludeFolders += @("android", "ios")
+}
+
+# Large, generated, binary, secret-bearing, or duplicate files.
+$ExcludeExactFiles = @(
+    $OutputFile,
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "bun.lockb",
+    ".DS_Store",
+    "google-services.json",
+    "GoogleService-Info.plist",
+    "credentials.json",
+    ".npmrc"
 )
 
-# 3. Targeted Source Code Extensions (React Native + Potential Hardware Scripts)
-$IncludeExtensions = @('*.tsx', '*.ts', '*.js', '*.mc', '*.xml', '*.jungle')
+$ExcludeFilePatterns = @(
+    "*.db",
+    "*.db-shm",
+    "*.db-wal",
+    "*.sqlite",
+    "*.sqlite3",
+    "*.sqlite-shm",
+    "*.sqlite-wal",
+    "*.apk",
+    "*.aab",
+    "*.ipa",
+    "*.app",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib",
+    "*.zip",
+    "*.tar",
+    "*.gz",
+    "*.7z",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.webp",
+    "*.ico",
+    "*.pdf",
+    "*.mp3",
+    "*.mp4",
+    "*.mov",
+    "*.wav",
+    "*.ttf",
+    "*.otf",
+    "*.woff",
+    "*.woff2",
+    "*.jks",
+    "*.keystore",
+    "*.p8",
+    "*.p12",
+    "*.pem",
+    "*.key",
+    "*.mobileprovision",
+    "*.log",
+    "*.tsbuildinfo",
+    "*.map"
+)
 
-Write-Host "Gathering DiscFinder project files..."
-Write-Output "=== DISCFINDER PROJECT ARCHITECTURE ===" | Out-File -FilePath $OutputFile
+# Source, configuration, documentation, migrations, tests, and automation.
+$IncludeExtensions = @(
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".json",
+    ".md",
+    ".sql",
+    ".ps1",
+    ".sh",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".graphql",
+    ".gql",
+    ".css",
+    ".scss",
+    ".html",
+    ".xml"
+)
 
-# Get all source files, filtering out the excluded folders AND files
-$files = Get-ChildItem -Path . -Recurse -Include $IncludeExtensions | Where-Object {
-    $path = $_.FullName
-    $name = $_.Name
-    $exclude = $false
-    
-    foreach ($folder in $ExcludeFolders) {
-        # Match exactly surrounded by slashes to avoid partial matches
-        if ($path -match "\\$folder\\") {
-            $exclude = $true
-            break
+# Important extensionless or dotfiles that are otherwise missed by extension filtering.
+$IncludeExactFiles = @(
+    ".clinerules",
+    ".clineignore",
+    ".gitignore",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "Dockerfile",
+    "LICENSE"
+)
+
+function Get-RelativePath {
+    param([string]$FullPath)
+
+    $NormalizedRoot = $RootPath.TrimEnd([char[]]"\/")
+    $Prefix = $NormalizedRoot + [System.IO.Path]::DirectorySeparatorChar
+
+    if ($FullPath.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $FullPath.Substring($Prefix.Length)
+    }
+
+    return $FullPath
+}
+
+function Test-ExcludedFile {
+    param([System.IO.FileInfo]$File)
+
+    if ($ExcludeExactFiles -contains $File.Name) {
+        return $true
+    }
+
+    if ($File.Name -like ".env*") {
+        return $true
+    }
+
+    foreach ($Pattern in $ExcludeFilePatterns) {
+        if ($File.Name -like $Pattern) {
+            return $true
         }
     }
-    
-    if ($ExcludeFiles -contains $name) {
-        $exclude = $true
+
+    return $false
+}
+
+function Test-IncludedFile {
+    param([System.IO.FileInfo]$File)
+
+    if ($IncludeExactFiles -contains $File.Name) {
+        return $true
     }
 
-    return -not $exclude
+    return $IncludeExtensions -contains $File.Extension.ToLowerInvariant()
 }
 
-# Print a clean list of files as our architecture tree
-$files | ForEach-Object { $_.FullName.Replace($PWD.Path + '\', '') } | Out-File -FilePath $OutputFile -Append
+function Get-ProjectFiles {
+    param([string]$Directory)
 
-Write-Output "`n=== FILE CONTENTS ===" | Out-File -FilePath $OutputFile -Append
+    foreach ($Item in Get-ChildItem -LiteralPath $Directory -Force -ErrorAction SilentlyContinue) {
+        if ($Item.PSIsContainer) {
+            if ($ExcludeFolders -contains $Item.Name) {
+                continue
+            }
 
-# Read and append the content of each file
-foreach ($file in $files) {
-    Write-Host "Packing: $($file.Name)"
-    Write-Output "`n=== $($file.FullName.Replace($PWD.Path + '\', '')) ===" | Out-File -FilePath $OutputFile -Append
-    Get-Content $file.FullName | Out-File -FilePath $OutputFile -Append
+            Get-ProjectFiles -Directory $Item.FullName
+            continue
+        }
+
+        if ($Item.FullName -eq $OutputPath) {
+            continue
+        }
+
+        if (Test-ExcludedFile -File $Item) {
+            continue
+        }
+
+        if (-not (Test-IncludedFile -File $Item)) {
+            continue
+        }
+
+        [PSCustomObject]@{
+            File = $Item
+            RelativePath = Get-RelativePath -FullPath $Item.FullName
+        }
+    }
 }
 
-Write-Host "Done! Project packed successfully into $OutputFile"
+Write-Host "Gathering project context for $ProjectName..."
+
+$AllCandidates = @(Get-ProjectFiles -Directory $RootPath | Sort-Object RelativePath)
+$IncludedFiles = @()
+$SkippedLargeFiles = @()
+
+foreach ($Candidate in $AllCandidates) {
+    if ($Candidate.File.Length -gt ($MaxFileSizeKB * 1KB)) {
+        $SkippedLargeFiles += $Candidate
+        continue
+    }
+
+    $IncludedFiles += $Candidate
+}
+
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$Writer = New-Object System.IO.StreamWriter($OutputPath, $false, $Utf8NoBom)
+
+try {
+    $Writer.WriteLine("=== PROJECT CONTEXT ===")
+    $Writer.WriteLine("Project: $ProjectName")
+    $Writer.WriteLine("Generated UTC: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))")
+    $Writer.WriteLine("Root folder: $RootPath")
+    $Writer.WriteLine("Included files: $($IncludedFiles.Count)")
+    $Writer.WriteLine("Maximum file size: $MaxFileSizeKB KB")
+    $Writer.WriteLine("Native folders included: $($IncludeNative.IsPresent)")
+    $Writer.WriteLine("")
+    $Writer.WriteLine("IMPORTANT: Review this file for secrets before uploading it to any AI service.")
+    $Writer.WriteLine("")
+
+    $Writer.WriteLine("=== PROJECT ARCHITECTURE ===")
+    foreach ($Candidate in $IncludedFiles) {
+        $Writer.WriteLine($Candidate.RelativePath)
+    }
+
+    if ($SkippedLargeFiles.Count -gt 0) {
+        $Writer.WriteLine("")
+        $Writer.WriteLine("=== SKIPPED LARGE FILES ===")
+        foreach ($Candidate in $SkippedLargeFiles) {
+            $SizeKB = [Math]::Round($Candidate.File.Length / 1KB, 1)
+            $Writer.WriteLine("$($Candidate.RelativePath) ($SizeKB KB)")
+        }
+    }
+
+    $Writer.WriteLine("")
+    $Writer.WriteLine("=== FILE CONTENTS ===")
+
+    foreach ($Candidate in $IncludedFiles) {
+        Write-Host "Packing: $($Candidate.RelativePath)"
+        $Writer.WriteLine("")
+        $Writer.WriteLine("=== $($Candidate.RelativePath) ===")
+
+        try {
+            $Content = [System.IO.File]::ReadAllText($Candidate.File.FullName)
+            $Writer.WriteLine($Content)
+        }
+        catch {
+            $Writer.WriteLine("[PACK ERROR: $($_.Exception.Message)]")
+        }
+    }
+}
+finally {
+    $Writer.Dispose()
+}
+
+$OutputSizeKB = [Math]::Round((Get-Item -LiteralPath $OutputPath).Length / 1KB, 1)
+
+Write-Host ""
+Write-Host "Done."
+Write-Host "Output: $OutputPath"
+Write-Host "Files packed: $($IncludedFiles.Count)"
+Write-Host "Large files skipped: $($SkippedLargeFiles.Count)"
+Write-Host "Context size: $OutputSizeKB KB"
+Write-Host ""
+Write-Host "Review the context file for secrets before uploading it."
